@@ -12,6 +12,7 @@ from openpi.models import pi0_config
 import openpi.models.gemma as _gemma
 import openpi.models.siglip as _siglip
 from openpi.shared import array_typing as at
+from openpi.training import gaze_kl as _gaze_kl
 
 logger = logging.getLogger("openpi")
 
@@ -98,6 +99,20 @@ class Pi0(_model.BaseModel):
             self.action_time_mlp_in = nnx.Linear(2 * action_expert_config.width, action_expert_config.width, rngs=rngs)
             self.action_time_mlp_out = nnx.Linear(action_expert_config.width, action_expert_config.width, rngs=rngs)
         self.action_out_proj = nnx.Linear(action_expert_config.width, config.action_dim, rngs=rngs)
+
+        # Gaze-KL auxiliary loss bookkeeping. When kl_lambda == 0 these stay
+        # unused and contribute zero to the total loss.
+        self.kl_lambda = config.kl_lambda
+        self.kl_grid = config.kl_grid
+        self.kl_sigma_in_grid = config.kl_sigma_in_grid
+        self.kl_image_size = config.kl_image_size
+        # Learned linear projection that maps the mean-pooled language tokens
+        # to a single global query for the gaze-KL aux-loss baseline
+        # (Gaze-Regularized VLA, arXiv:2603.23202). Created for every Pi0
+        # model but only used when kl_lambda > 0.
+        self.lang_pool = nnx.Linear(
+            paligemma_config.width, paligemma_config.width, rngs=rngs
+        )
 
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
@@ -188,7 +203,7 @@ class Pi0(_model.BaseModel):
     @override
     def compute_loss(
         self, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions, *, train: bool = False
-    ) -> at.Float[at.Array, "*b ah"]:
+    ) -> tuple[at.Float[at.Array, "*b ah"], at.Float[at.Array, ""]]:
         preprocess_rng, noise_rng, time_rng = jax.random.split(rng, 3)
         observation = _model.preprocess_observation(preprocess_rng, observation, train=train)
 
@@ -211,7 +226,67 @@ class Pi0(_model.BaseModel):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-        return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        action_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        kl_loss = self._compute_kl_aux_loss(observation, prefix_out)
+        return action_loss, kl_loss
+
+    def _compute_kl_aux_loss(
+        self,
+        observation: _model.Observation,
+        prefix_out: at.Float[at.Array, "b s d"],
+    ) -> at.Float[at.Array, ""]:
+        """Gaze KL auxiliary loss between language→base-camera attention and a
+        Gaussian gaze prior on the patch grid. Returns 0 when not configured.
+
+        ``prefix_out`` is the LLM's final-layer hidden states (post-RMSNorm) for
+        prefix tokens. Layout under Teleavatar configs:
+
+            [0 : 256)         base_0_rgb (head)    visual tokens
+            [256 : 512)       left_wrist_0_rgb     visual tokens
+            [512 : 768)       right_wrist_0_rgb    visual tokens
+            [768 : 768 + N_l) language tokens
+
+        Only the head-camera slice carries gaze, so we compute one KL on the
+        first 256 visual tokens.
+        """
+        if self.kl_lambda == 0.0 or observation.gaze_xy_kl is None:
+            return jnp.zeros((), dtype=jnp.float32)
+
+        # Number of visual tokens per view = grid * grid (SigLIP So400m/14 @ 224 -> 16x16).
+        n_v = self.kl_grid * self.kl_grid
+        # Head-camera visual tokens are the first n_v in prefix_out (first key in obs.images).
+        head_vis = prefix_out[:, :n_v, :].astype(jnp.float32)  # [B, n_v, d]
+        # Language tokens follow the visual block. Use tokenized_prompt_mask to
+        # identify which language positions are real (not padding).
+        lang_start = sum(n_v for _ in observation.images)  # n_v * num_views
+        n_l = observation.tokenized_prompt_mask.shape[-1]
+        lang_block = prefix_out[:, lang_start : lang_start + n_l, :].astype(jnp.float32)
+        lang_mask = observation.tokenized_prompt_mask.astype(jnp.float32)[..., None]
+
+        # Mean-pool real language tokens, then learned linear projection.
+        lang_sum = jnp.sum(lang_block * lang_mask, axis=1)
+        lang_count = jnp.sum(lang_mask, axis=1).clip(min=1.0)
+        lang_mean = lang_sum / lang_count  # [B, d]
+        q_lang = self.lang_pool(lang_mean)  # [B, d]
+
+        # Language→head attention: softmax(q_lang · K_head^T / sqrt(d)), where
+        # q_lang is the projected mean language embedding and the keys K_head
+        # are the final-layer (post-norm) hidden states of the head-camera
+        # visual tokens.
+        d = q_lang.shape[-1]
+        scores = jnp.einsum("bd,bnd->bn", q_lang, head_vis) / jnp.sqrt(d)
+        s_dist = jax.nn.softmax(scores, axis=-1)  # [B, n_v]
+
+        gaze_xy = jax.lax.stop_gradient(observation.gaze_xy_kl.astype(jnp.float32))
+        g_dist = _gaze_kl.gaze_to_patch_distribution(
+            gaze_xy,
+            grid=self.kl_grid,
+            sigma_in_grid=self.kl_sigma_in_grid,
+            image_size=self.kl_image_size,
+        )
+        g_dist = jax.lax.stop_gradient(g_dist)
+
+        return self.kl_lambda * _gaze_kl.kl_div(g_dist, s_dist)
 
     @override
     def sample_actions(

@@ -32,6 +32,20 @@ class Pi0Config(_model.BaseModelConfig):
     # This config option is not used directly by the model, but it is read by the ModelTransformFactory.
     discrete_state_input: bool = None  # type: ignore
 
+    # Gaze KL auxiliary loss baseline (Gaze-Regularized VLA, arXiv:2603.23202).
+    # When > 0 and ``observation.gaze_xy_kl`` is provided, the training loss
+    # adds ``kl_lambda * KL(G || S)``, where ``G`` is a Gaussian gaze prior on
+    # the ``kl_grid x kl_grid`` patch grid and
+    # ``S = softmax(q_lang · K_head^T / sqrt(d))``: ``q_lang`` is a learned
+    # projection of the mean-pooled language tokens and ``K_head`` are the
+    # final-layer hidden states of the head-camera visual tokens. Inference is
+    # unchanged. The aux-loss baseline uses ``0.001``, the original method's
+    # coefficient.
+    kl_lambda: float = 0.0
+    kl_grid: int = 16
+    kl_sigma_in_grid: float = 1.0
+    kl_image_size: int = 2160
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)

@@ -1,4 +1,64 @@
-# openpi
+# GazeMani: Gaze Prompts for Vision–Language–Action Fine-Tuning
+
+Training and deployment code for the paper *"Gaze Prompts: Temporally Dense
+Human Attention for Vision–Language–Action Fine-Tuning"* (CoRL 2026).
+Project page: <https://gazemani.github.io/>.
+Dataset: <https://huggingface.co/GazeMani2026/datasets> (six tasks, 200 demonstrations each, LeRobot v2.1 format).
+
+**Eye-tracker-supervised gaze prompting**: during VR teleoperation an HMD eye
+tracker records the operator's fixation. A lightweight gaze predictor
+([`src/gaze_predictor/`](src/gaze_predictor/)) learns to
+estimate fixation from RGB and language, and the prediction is rendered as a
+crosshair on the head-view image input of an unchanged π₀ policy — no eye
+tracker or architectural modification at deployment.
+
+This repository is a fork of [openpi](https://github.com/Physical-Intelligence/openpi)
+(Physical Intelligence's π₀ codebase); the upstream documentation is preserved
+below. GazeMani-specific additions:
+
+| Component | Path |
+| --- | --- |
+| Gaze predictor (training + eval) | `src/gaze_predictor/` |
+| Crosshair rendering + Teleavatar data pipeline | `src/openpi/policies/teleavatar_policy.py`, `src/openpi/training/config.py` (`pi0_teleavatar`) |
+| Gaze-KL aux-loss baseline | `src/openpi/training/gaze_kl.py`, `--data.use-kl-aux-loss` |
+| Robot deployment (ROS2) | `examples/teleavatar/` |
+
+## Reproducing the paper
+
+### Policy
+
+Each π₀ condition is a per-task fine-tune of the released π₀ base checkpoint
+on the corresponding GazeMani task dataset (200 demos per task; download from
+[Hugging Face](https://huggingface.co/GazeMani2026/datasets)). `pi0_teleavatar` carries the paper's training settings;
+compute norm stats once per dataset, then train each condition:
+
+```bash
+uv run scripts/compute_norm_stats.py --config-name pi0_teleavatar --repo-id /path/to/task_dataset
+
+# Vanilla π₀
+uv run scripts/train.py pi0_teleavatar --exp-name vanilla \
+    --data.repo-id /path/to/task_dataset --weight-loader.params-path /path/to/pi0_base/params
+
+# Gaze prompt (ours): recorded gaze rendered as a crosshair on the head view
+uv run scripts/train.py pi0_teleavatar --exp-name gaze-prompt --data.use-gt-crosshair \
+    --data.repo-id /path/to/task_dataset --weight-loader.params-path /path/to/pi0_base/params
+
+# Aux-loss baseline (gaze KL regularizer)
+uv run scripts/train.py pi0_teleavatar --exp-name aux-loss --data.use-kl-aux-loss --model.kl-lambda 0.001 \
+    --data.repo-id /path/to/task_dataset --weight-loader.params-path /path/to/pi0_base/params
+```
+
+### Gaze predictor
+
+Trained jointly on all six tasks; see [`src/gaze_predictor/README.md`](src/gaze_predictor/README.md).
+
+### Robot rollouts
+
+See [`examples/teleavatar/README.md`](examples/teleavatar/README.md).
+
+---
+
+# openpi (upstream documentation)
 
 openpi holds open-source models and packages for robotics, published by the [Physical Intelligence team](https://www.physicalintelligence.company/).
 
@@ -8,15 +68,6 @@ Currently, this repo contains three types of models:
 - the [π₀.₅ model](https://www.physicalintelligence.company/blog/pi05), an upgraded version of π₀ with better open-world generalization trained with [knowledge insulation](https://www.physicalintelligence.company/research/knowledge_insulation). Note that, in this repository, we currently only support the flow matching head for both $\pi_{0.5}$ training and inference.
 
 For all models, we provide _base model_ checkpoints, pre-trained on 10k+ hours of robot data, and examples for using them out of the box or fine-tuning them to your own datasets.
-
-This is an experiment: $\pi_0$ was developed for our own robots, which differ from the widely used platforms such as [ALOHA](https://tonyzhaozh.github.io/aloha/) and [DROID](https://droid-dataset.github.io/), and though we are optimistic that researchers and practitioners will be able to run creative new experiments adapting $\pi_0$ to their own platforms, we do not expect every such attempt to be successful. All this is to say: $\pi_0$ may or may not work for you, but you are welcome to try it and see!
-
-## Updates
-
-- [Sept 2025] We released PyTorch support in openpi.
-- [Sept 2025] We released pi05, an upgraded version of pi0 with better open-world generalization.
-- [Sept 2025]: We have added an [improved idle filter](examples/droid/README_train.md#data-filtering) for DROID training.
-- [Jun 2025]: We have added [instructions](examples/droid/README_train.md) for using `openpi` to train VLAs on the full [DROID dataset](https://droid-dataset.github.io/). This is an approximate open-source implementation of the training pipeline used to train pi0-FAST-DROID. 
 
 
 ## Requirements
@@ -36,7 +87,7 @@ The repo has been tested with Ubuntu 22.04, we do not currently support other op
 When cloning this repo, make sure to update submodules:
 
 ```bash
-git clone --recurse-submodules git@github.com:Physical-Intelligence/openpi.git
+git clone --recurse-submodules <this-repo-url>
 
 # Or if you already cloned the repo:
 git submodule update --init --recursive

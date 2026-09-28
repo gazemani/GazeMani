@@ -51,7 +51,10 @@ class CheckpointWeightLoader(WeightLoader):
         # We are loading np.ndarray and relying on the training code to properly convert and shard the params.
         loaded_params = _model.restore_params(download.maybe_download(self.params_path), restore_type=np.ndarray)
         # Add all missing LoRA weights.
-        return _merge_params(loaded_params, params, missing_regex=".*lora.*")
+        # ``lang_pool`` is a Pi0 module added by GazeMani (gaze-KL aux loss)
+        # that is not present in released checkpoints; it keeps its fresh
+        # init values when missing.
+        return _merge_params(loaded_params, params, missing_regex=".*lora.*|.*lang_pool.*")
 
 
 @dataclasses.dataclass(frozen=True)

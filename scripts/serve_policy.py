@@ -18,6 +18,7 @@ class EnvMode(enum.Enum):
     ALOHA_SIM = "aloha_sim"
     DROID = "droid"
     LIBERO = "libero"
+    TELEAVATAR = "teleavatar"
 
 
 @dataclasses.dataclass
@@ -28,6 +29,10 @@ class Checkpoint:
     config: str
     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
     dir: str
+    # Override for the asset_id used to find norm_stats in <dir>/assets/<asset_id>/.
+    # Needed when the training config's repo_id is a placeholder (the typical
+    # Teleavatar case: train with --data.repo-id <DATASET>, then serve here).
+    asset_id: str | None = None
 
 
 @dataclasses.dataclass
@@ -89,8 +94,20 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
+            train_config = _config.get_config(args.policy.config)
+            norm_stats = None
+            if args.policy.asset_id is not None:
+                # Bypass the data_config.asset_id resolution (which uses the
+                # config's placeholder repo_id) and load norm_stats directly.
+                from openpi.training import checkpoints as _checkpoints
+                import pathlib as _pl
+                norm_stats = _checkpoints.load_norm_stats(
+                    _pl.Path(args.policy.dir) / "assets", args.policy.asset_id
+                )
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+                train_config, args.policy.dir,
+                default_prompt=args.default_prompt,
+                norm_stats=norm_stats,
             )
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

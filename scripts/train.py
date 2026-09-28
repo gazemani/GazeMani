@@ -147,15 +147,21 @@ def train_step(
     def loss_fn(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
-        chunked_loss = model.compute_loss(rng, observation, actions, train=True)
-        return jnp.mean(chunked_loss)
+        chunked_loss, kl_loss = model.compute_loss(rng, observation, actions, train=True)
+        action_loss = jnp.mean(chunked_loss)
+        # ``kl_loss`` is already weighted by ``kl_lambda`` inside the model
+        # (zero scalar when KL aux is disabled).
+        total = action_loss + kl_loss
+        return total, (action_loss, kl_loss)
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    (loss, (action_loss, kl_loss)), grads = nnx.value_and_grad(
+        loss_fn, argnums=diff_state, has_aux=True
+    )(model, train_rng, observation, actions)
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -185,6 +191,8 @@ def train_step(
     )
     info = {
         "loss": loss,
+        "action_loss": action_loss,
+        "kl_loss": kl_loss,
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
     }
@@ -226,12 +234,6 @@ def main(config: _config.TrainConfig):
     batch = next(data_iter)
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
 
-    # Log images from first batch to sanity check.
-    images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
-    ]
-    wandb.log({"camera_views": images_to_log}, step=0)
 
     train_state, train_state_sharding = init_train_state(config, init_rng, mesh, resume=resuming)
     jax.block_until_ready(train_state)
@@ -260,13 +262,21 @@ def main(config: _config.TrainConfig):
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
         infos.append(info)
+        log_dict = {}
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
             pbar.write(f"Step {step}: {info_str}")
-            wandb.log(reduced_info, step=step)
+            log_dict.update(reduced_info)
             infos = []
+        if step % config.image_log_interval == 0:
+            log_dict["camera_views"] = [
+                wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
+                for i in range(min(5, len(next(iter(batch[0].images.values())))))
+            ]
+        if log_dict:
+            wandb.log(log_dict, step=step)
         batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:

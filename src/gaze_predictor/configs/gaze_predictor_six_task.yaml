@@ -1,0 +1,51 @@
+name: gaze_predictor_six_task
+encoder_kind: clip_clip
+val_split_ratio: 0.2
+# Joint six-task training (the configuration used in the paper).
+# Plan enumerates (160 train episodes per task after the 80/20 split) * (spe)
+# randomly sampled timesteps per dataset.
+# Order must match the CLI --train_datasets order:
+#   0: catch_rolling_ball_train    (T6, 220 fr/ep)
+#   1: insert_toilet_paper_train   (T5, 226 fr/ep)
+#   2: stack_bowls_train           (T1, 389 fr/ep)
+#   3: stack_cubes_in_order_train  (T2, 387 fr/ep)
+#   4: bus_table_train             (T3, 1056 fr/ep)
+#   5: fold_towel_train            (T4, 1189 fr/ep)
+samples_per_episode: [25, 25, 40, 50, 60, 80]
+# Per-epoch sampler draws (with replacement). At batch=64 -> ~700 batches/epoch.
+# Tuned so each cached sample is drawn ~1x per epoch on average
+# (44.8K cached train plans -> 45K draws).
+samples_per_epoch: 45000
+sampling_mode: weighted_balanced
+anchor_offsets: [0]
+gaze_fallback_value: [0, 0]
+min_episode_length: 30
+left_crop_size: 2160
+clip_mean: [0.48145466, 0.4578275, 0.40821073]
+clip_std:  [0.26862954, 0.26130258, 0.27577711]
+clip_model_id: openai/clip-vit-base-patch16
+fusion_dim: 256
+n_anchors: 1
+grid: 224
+heatmap_sigma_in_grid: 16
+batch_size: 64
+epochs: 100
+lr: 1.0e-4
+weight_decay: 0.01
+betas: [0.9, 0.999]
+warmup_steps: 200
+schedule_lr_min: 1.0e-6
+mixed_precision: bf16
+seed: 42
+patience: 10
+num_workers: 4
+cache_dir: ./cache/gaze_predictor_clip_features
+out_dir: ./runs/gaze_predictor_six_task
+wandb: false
+wandb_project: gaze_predictor
+
+head_kind: prompt_then_temporal_224
+temporal_K: 3
+n_temporal_layers: 2
+
+prompt_mode: default

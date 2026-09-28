@@ -1,0 +1,45 @@
+name: gaze_predictor_single_task
+encoder_kind: clip_clip
+val_split_ratio: 0.2
+# Single-dataset training template (e.g., a new task or a quick check). Pass
+# one train_dataset path via the CLI (run_train.py --train_datasets <path>).
+# samples_per_episode=500 randomly sampled timesteps per episode; the vision cache
+# deduplicates repeated (dataset, episode, t).
+#
+# For joint multi-dataset training prefer gaze_predictor_six_task.yaml
+# instead; this single-task variant intentionally uses shuffle=True (no
+# weighted sampler) since there is only one dataset to balance.
+samples_per_episode: 500
+anchor_offsets: [0]
+gaze_fallback_value: [0, 0]
+min_episode_length: 30
+left_crop_size: 2160
+clip_mean: [0.48145466, 0.4578275, 0.40821073]
+clip_std:  [0.26862954, 0.26130258, 0.27577711]
+clip_model_id: openai/clip-vit-base-patch16
+fusion_dim: 256
+n_anchors: 1
+grid: 224
+heatmap_sigma_in_grid: 16
+batch_size: 64
+# --epochs / --patience on run_train override the two values below.
+epochs: 200
+lr: 1.0e-4
+weight_decay: 0.01
+betas: [0.9, 0.999]
+warmup_steps: 200
+schedule_lr_min: 1.0e-6
+mixed_precision: bf16
+seed: 42
+patience: 20
+num_workers: 4
+cache_dir: ./cache/gaze_predictor_clip_features
+out_dir: ./runs/gaze_predictor_single_task
+wandb: false
+wandb_project: gaze_predictor
+
+head_kind: prompt_then_temporal_224
+temporal_K: 3
+n_temporal_layers: 2
+
+prompt_mode: default

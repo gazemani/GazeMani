@@ -17,8 +17,9 @@ def test_pi0_model():
     batch_size = 2
     obs, act = config.fake_obs(batch_size), config.fake_act(batch_size)
 
-    loss = nnx_utils.module_jit(model.compute_loss)(key, obs, act)
+    loss, kl = nnx_utils.module_jit(model.compute_loss)(key, obs, act)
     assert loss.shape == (batch_size, config.action_horizon)
+    assert kl.shape == ()
 
     actions = nnx_utils.module_jit(model.sample_actions)(key, obs, num_steps=10)
     assert actions.shape == (batch_size, model.action_horizon, model.action_dim)
@@ -32,8 +33,9 @@ def test_pi0_lora_model():
     batch_size = 2
     obs, act = config.fake_obs(batch_size), config.fake_act(batch_size)
 
-    loss = nnx_utils.module_jit(model.compute_loss)(key, obs, act)
+    loss, kl = nnx_utils.module_jit(model.compute_loss)(key, obs, act)
     assert loss.shape == (batch_size, config.action_horizon)
+    assert kl.shape == ()
 
     actions = nnx_utils.module_jit(model.sample_actions)(key, obs, num_steps=10)
     assert actions.shape == (batch_size, model.action_horizon, model.action_dim)
@@ -47,8 +49,9 @@ def test_pi0_fast_model():
     batch_size = 2
     obs, act = config.fake_obs(batch_size), config.fake_act(batch_size)
 
-    loss = nnx_utils.module_jit(model.compute_loss)(key, obs, act)
+    loss, kl = nnx_utils.module_jit(model.compute_loss)(key, obs, act)
     assert loss.shape == (batch_size,)
+    assert kl.shape == ()
 
     actions = nnx_utils.module_jit(model.sample_actions)(key, obs)
     assert actions.shape == (batch_size, 256)
@@ -62,8 +65,9 @@ def test_pi0_fast_lora_model():
     batch_size = 2
     obs, act = config.fake_obs(batch_size), config.fake_act(batch_size)
 
-    loss = nnx_utils.module_jit(model.compute_loss)(key, obs, act)
+    loss, kl = nnx_utils.module_jit(model.compute_loss)(key, obs, act)
     assert loss.shape == (batch_size,)
+    assert kl.shape == ()
 
     actions = nnx_utils.module_jit(model.sample_actions)(key, obs)
     assert actions.shape == (batch_size, 256)
@@ -87,8 +91,9 @@ def test_model_restore():
         _model.restore_params(download.maybe_download("gs://openpi-assets/checkpoints/pi0_base/params"))
     )
 
-    loss = model.compute_loss(key, obs, act)
+    loss, kl = model.compute_loss(key, obs, act)
     assert loss.shape == (batch_size, config.action_horizon)
+    assert kl.shape == ()
 
     actions = model.sample_actions(key, obs, num_steps=10)
     assert actions.shape == (batch_size, model.action_horizon, model.action_dim)
